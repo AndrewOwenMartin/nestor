@@ -1,0 +1,572 @@
+\documentclass[a4paper]{article}
+% \documentclass[twocolumn,12pt]{article}
+\usepackage{hyperref}
+\usepackage{noweb}
+\usepackage{amsmath}
+\usepackage[UKenglish]{datetime}
+%\usepackage[UKenglish]{isodate}
+\newdateformat{mydate}{\twodigit{\THEDAY}{} \monthname[\THEMONTH]{} \THEYEAR}
+\noweboptions{longxref,alphasubpage,subscriptidents,subscriptquotedidents,longchunks}
+
+% % Set up formatting to look more like a modern report than an old book.
+\setlength{\parindent}{0em}
+\setlength{\parskip}{1em}
+
+% Default Geometry
+% \usepackage[margin=0.5in]{geometry}
+% \usepackage[margin=0.5in, paperwidth=14.15in, paperheight=11.25in]{geometry} % 1280 x 1024 Monitor reading
+% \usepackage[margin=0.5in, paperwidth=16.5in, paperheight=9.25in]{geometry} % 1600 x 900 Monitor reading (ThinkPad)
+% \usepackage[margin=0.5in, paperwidth=19.9in, paperheight=11.1in]{geometry} % 1920 x 1080 Monitor reading (MultiSync EA234WMi)
+% \usepackage[margin=0.5in, paperheight=19.9in, paperwidth=11.1in]{geometry} % 1080 x 1920 Monitor reading (Portrait MultiSync EA234WMi)
+
+
+\setlength{\columnsep}{1in}
+\setlength{\columnseprule}{1px}
+
+\date{\mydate\today}
+
+\title{NESTOR}
+\author{Andrew Owen Martin}
+
+\pagestyle{noweb}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\section{Introduction}
+
+NESTOR is three sets of nodes, retina, memory and matching.
+
+\section{Canonical description}
+Matching neurons are fully interconnected to all other matching neurons.
+They are also fully connected to both receptor neurons and memory neurons.
+
+The output [of matching neurons] will always consist of (parts of) the accepted spike trains.
+
+Matching neurons both maintain and output hypotheses--`where' values--defining possible locations of the target pattern on the retina.
+
+An active matching neuron will output its current hypothesis as a spike train; an inactive matching neuron will adopt a new hypothesis from the first spike train it receives and output this.
+
+Matching neurons evaluate their hypothesis--`where' value--by comparing randomly selected micro-feature(s)--`what' information--from the memory and the corresponding `what' information from the retina. If the micro-features (the corresponding `what' values) are the same \ldots{} the matching neuron becomes active.
+
+An active matching neuron initiates a spike train and retains its current hypothesis (its `where' value).
+
+A neuron failing to discover the same microfeature will remain inactive and will adopt a new hypothesis encoded in a spike train arriving from other matching neurons.
+
+[I]f the first spike train arrives from memory or retina, a matching neuron will simply output a spike train encoding the position defined by the input trains without further processing of changes to its [notional] state.
+
+A matching neuron only stores the `where' information \ldots{} of an accepted spike train. 
+
+If a neuron is in an active state, it will select for processing the first spike trains from the retina and memory such that $\Delta{}^{w}_{\text{ret}} + \Delta{}^{w}_{\text{mem}} = \Delta{}^{w}_{\text{neur}}$.
+
+If the comparison is successful (i.e. the `what' of the memory neuron matches the `what' of the retina neuron) the matching neuron fires a spike train corresponding to the position defined by its hypothesis $\Delta{}^{w}_{\text{neur}}$.
+
+Otherwise, the matching neuron will become inactive. In the inactive state the matching neuron will accept information from either the first arriving spike train from another matching neuron or spike trains memory and the retina (albeit with no constraints on ISI's). I think this means it does not wait for a pair of spike trains where the `where' parts add up to something specific.
+
+If the first spike train comes from a retina and memory cell then it adds up the `where' parts and emits it. If the first spike comes from a matching cell then it will adopt the `where' part as its hypothesis and become active.
+
+\section{Finite state machine}
+
+
+So what are the actual states? Retina and memory cells just fire their position and feature, retina cells also update their feature. For matching cells I need a list of states, and a list of events.
+
+States
+\begin{enumerate}
+\item No retina and no memory and inactive
+\item Retina and no memory and inactive
+\item No retina and memory and inactive
+\item Retina and memory and inactive
+\item About to fire and inactive
+\item No retina and no memory and active
+\item Retina and no memory and active
+\item No retina and memory and active
+\item Retina and memory and active
+\item About to fire and active
+\end{enumerate}
+
+Events
+\begin{enumerate}
+\item Retina spike received
+\item Memory spike received
+\item Matching spike received
+\item Time to fire equals zero
+\end{enumerate}
+
+
+\section{Inter-spike Interval (ISI)}
+<<isi class>>=
+ISI = namedtuple('ISI', ('position', 'feature'))
+@
+
+<<match isi class>>=
+MatchISI = namedtuple('MatchISI', ('retina', 'memory'))
+@
+
+<<dependencies>>=
+from collections import namedtuple
+@
+
+<<nestor classes>>=
+<<isi class>>
+<<match isi class>>
+@
+
+\section{Cell}
+
+\subsection{Cell class}
+<<cell class>>=
+class Cell:
+
+	def __init__(self, id_num):
+		self.id_num = id_num
+		self.isi = None
+		self.rest_time = None
+		self.rest()
+		self.links = None
+
+	def __repr__(self):
+		return 'cell'
+
+@
+
+<<dependencies>>=
+from datetime import timedelta
+import random
+@
+
+<<nestor classes>>=
+<<cell class>>
+@
+
+\subsection{Static Cell class}
+<<static cell class>>=
+class StaticCell(Cell):
+
+	def __init__(self,position,feature):
+		super().__init__(id_num=position)
+		self.position = position
+		self.feature = feature
+
+	def tick(self, dt):
+		self.rest_time -= dt
+		if self.rest_time <= timedelta(0):
+			self.fire()
+
+	def fire(self):
+		log.info('{name:8} {id_num} fires {isi}'.format(
+			id_num=self.id_num,
+			name=self.name,
+			isi=self.isi,
+		))
+		for cell in self.links:
+			self.send(cell,self.isi)
+		self.rest()
+
+@
+
+<<nestor classes>>=
+<<static cell class>>
+@
+
+\subsection{Retina class}
+<<retina class>>=
+class Retina(StaticCell):
+
+	name = 'retina'
+
+	def __init__(self, position):
+		super().__init__(position=position,feature=None)
+
+	def send(self,cell,isi):
+		log.debug('Retina {i} sends {isi}'.format(
+			i=self.position,
+			isi=self.isi,
+		))
+		cell.retina_input = isi
+		cell.listen()
+@
+
+<<nestor classes>>=
+<<retina class>>
+@
+
+\subsection{Memory class}
+<<memory class>>=
+class Memory(StaticCell):
+
+	def __init__(self,position,feature):
+		super().__init__(position,feature)
+		self.isi = ISI(position=self.position,feature=self.feature)
+
+	name = 'memory'
+
+	def send(self,cell,isi):
+		log.debug('Memory {i} sends {isi}'.format(
+			i=self.position,
+			isi=self.isi,
+		))
+		cell.memory_input = isi
+		cell.listen()
+
+@
+
+<<nestor classes>>=
+<<memory class>>
+@
+
+\subsection{Matching class}
+<<matching class>>=
+class Matching(Cell):
+
+	name = 'matching'
+
+	def __init__(self, id_num):
+		super().__init__(id_num)
+
+		self.memory_isi = None
+		self.retina_isi = None
+
+		self.retina_input = None
+		self.memory_input = None
+		self.matching_input = None
+
+		self.active = False
+		self.listening = False
+
+	def send(self,cell,isi):
+		cell.matching_input = isi
+		cell.listen()
+
+	def listen(self):
+
+		if not self.listening:
+			# Clear all the input channels
+			self.retina_input = None
+			self.memory_input = None
+			self.matching_input = None
+			return
+			
+	
+		# If you're inactive and listening and matching fires, adopt 
+		# it and become active.
+		if (
+			not self.active
+			and self.matching_input is not None
+		):
+			self.isi = self.matching_input
+			self.active = True
+
+		# If you're listening and retina fires and you don't have a
+		# retina value then store it.
+		if (
+			self.retina_isi is None
+			and self.retina_input is not None
+		):
+			self.retina_isi = self.retina_input
+
+		# If you're listening and memory fires and you don't have a
+		# memory value then store it.
+		if (
+			self.memory_isi is None
+			and self.memory_input is not None
+		):
+			self.memory_isi = self.memory_input
+
+		# If inactive but with a memory isi and a retina isi stored
+		# then stop listening and fire it to the other memory cells.
+		if (
+			self.memory_isi
+			and self.retina_isi
+		):
+			self.isi = self.memory_isi.position + self.retina_isi.position
+
+		# If listening and memory isi and retina isi and either
+		# inactive or active and with identical features.
+		if (
+			self.memory_isi
+			and self.retina_isi
+			and not self.active
+		):
+			self.rest_time = timedelta(0, random.uniform(5,10))
+
+			self.listening = False
+
+		if (
+			self.memory_isi
+			and self.retina_isi
+			and self.active
+		):
+
+			if (self.memory_isi.feature == self.retina_isi.feature):
+
+				self.rest_time = timedelta(0, random.uniform(5,10))
+
+				self.listening = False
+				
+			else:
+
+				self.active = False
+				
+		# Clear all the input channels
+		self.retina_input = None
+		self.memory_input = None
+		self.matching_input = None
+
+	def fire(self):
+		log.info('{name:8} {id_num} fires {isi}'.format(
+			id_num=self.id_num,
+			name=self.name,
+			isi=self.isi,
+		))
+		for cell in self.links:
+			self.send(cell,self.isi)
+		self.memory_isi = None
+		self.retina_isi = None
+
+	def rest(self):
+
+
+	#def adopt(self):
+	#	self.isi = MatchISI(retina=self.retina_isi,memory=self.memory_isi)
+	#	self.hypothesis = self.isi.retina.position + self.isi.memory.position
+	#	self.rest()
+
+	def tick(self, dt):
+		if(
+			self.isi is not None
+		):
+			self.rest_time -= dt
+
+			if self.rest_time <= timedelta(0):
+				self.fire()
+@
+
+<<nestor classes>>=
+<<matching class>>
+@
+
+\subsection{old listen code}
+<<old listen code>>=
+if (
+	self.matching_input is not None
+	and self.isi is None
+):
+	self.isi = self.matching_input
+	self.rest()
+
+	self.adopt()
+	log.info('{name} {id_num} diffuses hyp {isi}'.format(
+		name=self.name,
+		id_num=self.id_num,
+		isi=self.isi,
+	))
+
+self.matching_input = None
+
+if self.retina_isi is None and self.retina_input is not None:
+
+	self.retina_isi = self.retina_input.position
+
+	log.info('{name} {id_num} adopts retina {x}'.format(
+		name=self.name,
+		id_num=self.id_num,
+		x=self.retina_isi,
+	))
+
+	if self.memory_isi is not None:
+		self.adopt()
+
+self.retina_input = None
+
+if self.memory_isi is None and self.memory_input is not None:
+
+	self.memory_isi = self.memory_input
+
+	log.info('{name} {id_num} adopts memory {x}'.format(
+		name=self.name,
+		id_num=self.id_num,
+		x=self.memory_isi,
+	))
+
+	if self.retina_isi is not None:
+		self.adopt()
+
+self.memory_input = None
+@
+
+\section{Network}
+<<network class>>=
+Network = namedtuple('Network',('retina','memory','matching'))
+@
+
+<<nestor classes>>=
+<<network class>>
+@
+
+\subsection{Make Network function}
+<<make network function>>=
+def make_network(retina_count, matching_count, memory_features):
+
+	# Make retina cells
+	retina_cells = [
+		Retina(position=retina_count - retina_num,)
+		for retina_num
+		in range(retina_count)
+	]
+
+	# Make memory cells
+	memory_cells = [
+		Memory(position=memory_num, feature=feature)
+		for memory_num, feature
+		in enumerate(memory_features, start=1)
+	]
+
+	# Make matching cells
+	matching_cells = [
+		Matching(id_num=matching_num)
+		for matching_num
+		in range(matching_count)
+	]
+
+	for retina in retina_cells:
+		retina.links = matching_cells
+
+	for memory in memory_cells:
+		memory.links = matching_cells
+
+	for num, matching in enumerate(matching_cells):
+		others = matching_cells[:num] + matching_cells[num+1:]
+		matching.links = others
+
+	return Network(
+		retina=retina_cells,
+		matching=matching_cells,
+		memory=memory_cells,)
+@
+
+<<nestor methods>>=
+<<make network function>>
+@
+
+\subsection{Update retina}
+<<update retina function>>=
+def update_retina(network, retina_features):
+	for cell, feature in zip(network.retina, retina_features):
+		cell.feature = feature
+		cell.isi = ISI(position=cell.position,feature=feature)
+@
+
+<<nestor methods>>=
+<<update retina function>>
+@
+
+\subsection{Run network function}
+<<run network function>>=
+def run_network(network, start):
+	i = 0
+	while True:
+		now = datetime.now()
+		dt = now - start
+		log.debug('Iteration {i} at {t}. dt={dt}'.format(
+			i=i,
+			t=now.strftime("%H:%M:%S.%f"),
+			dt=dt,
+		))
+		for cell in chain.from_iterable(network):
+			cell.tick(dt)
+		start = now
+		i += 1
+		time.sleep(0.2)
+@
+
+<<dependencies>>=
+from itertools import chain
+from datetime import datetime
+import time
+@
+
+<<nestor methods>>=
+<<run network function>>
+@
+
+\section{Front end}
+<<front end>>=
+
+description = (
+	"Run a NESTOR, mostly as a library" # Action of the script
+)
+
+if __name__ == '__main__':
+	parser = argparse.ArgumentParser(
+		description=description,
+	)
+	
+	#parser.add_argument(
+	#	"positional_arg",
+	#	type=int,
+	#	help="Integer positional argument",
+	#)
+
+	parser.add_argument(
+		'-o','--optional',
+		type=int,
+		default=42,
+		help="Integer keyword argument",
+	)
+
+	args = parser.parse_args()
+
+	#print(args.optional)
+
+	network = make_network(
+		retina_count=5,
+		matching_count=2,
+		memory_features=('red','green','red'),)
+
+	update_retina(
+		network,
+		('green','red','green','red','black'),)
+
+	try:
+		run_network(network,start=datetime.now())
+	except KeyboardInterrupt:
+		log.info('finished')
+@
+
+<<dependencies>>=
+import argparse
+@
+
+\section{Library definition}
+<<nestor.py>>=
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+<<dependencies>>
+<<init logging>>
+<<nestor classes>>
+<<nestor methods>>
+<<front end>>
+@
+
+\subsection{Logging}
+<<init logging>>=
+log.basicConfig(level=log.INFO)
+@
+
+<<dependencies>>=
+import logging as log
+@
+
+\appendix{}
+
+\section{Index}
+
+\nowebindex{}
+
+\section{Code Chunks}
+
+\nowebchunks{}
+
+\end{document}
+
