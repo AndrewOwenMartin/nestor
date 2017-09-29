@@ -93,309 +93,129 @@ Events
 \item Time to fire equals zero
 \end{enumerate}
 
-
 \section{Inter-spike Interval (ISI)}
 <<isi class>>=
 ISI = namedtuple('ISI', ('position', 'feature'))
 @
 
-<<match isi class>>=
-MatchISI = namedtuple('MatchISI', ('retina', 'memory'))
-@
-
-<<dependencies>>=
-from collections import namedtuple
-@
-
 <<nestor classes>>=
 <<isi class>>
-<<match isi class>>
 @
 
-\section{Cell}
+\section{Cell classes}
 
 \subsection{Cell class}
 <<cell class>>=
 class Cell:
 
-	def __init__(self, id_num):
+	def __init__(self, id_num, where, what):
 		self.id_num = id_num
-		self.isi = None
-		self.rest_time = None
-		self.rest()
-		self.links = None
+		self.where = where
+		self.what = what
 
 	def __repr__(self):
 		return 'cell'
-
 @
 
-<<dependencies>>=
-from datetime import timedelta
-import random
-@
 
 <<nestor classes>>=
 <<cell class>>
 @
-
-\subsection{Static Cell class}
-<<static cell class>>=
-class StaticCell(Cell):
-
-	def __init__(self,position,feature):
-		super().__init__(id_num=position)
-		self.position = position
-		self.feature = feature
-
-	def tick(self, dt):
-		self.rest_time -= dt
-		if self.rest_time <= timedelta(0):
-			self.fire()
-
-	def fire(self):
-		log.info('{name:8} {id_num} fires {isi}'.format(
-			id_num=self.id_num,
-			name=self.name,
-			isi=self.isi,
-		))
-		for cell in self.links:
-			self.send(cell,self.isi)
-		self.rest()
-
-@
-
-<<nestor classes>>=
-<<static cell class>>
-@
-
-\subsection{Retina class}
-<<retina class>>=
-class Retina(StaticCell):
-
-	name = 'retina'
-
-	def __init__(self, position):
-		super().__init__(position=position,feature=None)
-
-	def send(self,cell,isi):
-		log.debug('Retina {i} sends {isi}'.format(
-			i=self.position,
-			isi=self.isi,
-		))
-		cell.retina_input = isi
-		cell.listen()
-@
-
-<<nestor classes>>=
-<<retina class>>
-@
-
-\subsection{Memory class}
-<<memory class>>=
-class Memory(StaticCell):
-
-	def __init__(self,position,feature):
-		super().__init__(position,feature)
-		self.isi = ISI(position=self.position,feature=self.feature)
+\subsection{Memory cell}
+<<memory cell>>=
+class Memory(Cell):
 
 	name = 'memory'
-
-	def send(self,cell,isi):
-		log.debug('Memory {i} sends {isi}'.format(
-			i=self.position,
-			isi=self.isi,
-		))
-		cell.memory_input = isi
-		cell.listen()
-
 @
 
 <<nestor classes>>=
-<<memory class>>
+<<memory cell>>
 @
 
-\subsection{Matching class}
-<<matching class>>=
+\subsection{Retina cell}
+<<retina cell>>=
+class Retina(Cell):
+	
+	name = 'retina'
+@
+
+<<nestor classes>>=
+<<retina cell>>
+@
+
+\subsection{Update retina function}
+<<update retina function>>=
+def update_retina(network, retina_features):
+	for cell, feature in zip(network.retina, retina_features):
+		cell.what = feature
+@
+
+<<nestor methods>>=
+<<update retina function>>
+@
+
+\subsection{Process cell function}
+<<process cell function>>=
+def process_cell(cell, mean, sigma, min_wait, max_wait, sleep):
+	start_time = datetime.now()
+	time_to_fire = timedelta(0)
+	while True:
+		now = datetime.now()	
+		dt = datetime.now() - start_time
+		start_time = now
+		time_to_fire -= dt
+		if time_to_fire <= timedelta(0):
+			next_wait = max(
+				min(random.gauss(mean,sigma), max_wait),
+				min_wait)
+			log.info('{n}#{num} fires, next fire in {x:0.3f}s'.format(
+				n=cell.name,
+				num=cell.id_num,
+				x=next_wait))
+			time_to_fire = timedelta(0, next_wait)
+		time.sleep(sleep)
+@
+
+<<dependencies>>=
+import random
+import sys
+@
+
+<<nestor methods>>=
+<<process cell function>>
+@
+
+\subsection{Matching cell}
+<<matching cell>>=
 class Matching(Cell):
 
 	name = 'matching'
 
-	def __init__(self, id_num):
-		super().__init__(id_num)
-
-		self.memory_isi = None
-		self.retina_isi = None
-
-		self.retina_input = None
-		self.memory_input = None
-		self.matching_input = None
-
-		self.active = False
-		self.listening = False
-
-	def send(self,cell,isi):
-		cell.matching_input = isi
-		cell.listen()
-
-	def listen(self):
-
-		if not self.listening:
-			# Clear all the input channels
-			self.retina_input = None
-			self.memory_input = None
-			self.matching_input = None
-			return
-			
-	
-		# If you're inactive and listening and matching fires, adopt 
-		# it and become active.
-		if (
-			not self.active
-			and self.matching_input is not None
-		):
-			self.isi = self.matching_input
-			self.active = True
-
-		# If you're listening and retina fires and you don't have a
-		# retina value then store it.
-		if (
-			self.retina_isi is None
-			and self.retina_input is not None
-		):
-			self.retina_isi = self.retina_input
-
-		# If you're listening and memory fires and you don't have a
-		# memory value then store it.
-		if (
-			self.memory_isi is None
-			and self.memory_input is not None
-		):
-			self.memory_isi = self.memory_input
-
-		# If inactive but with a memory isi and a retina isi stored
-		# then stop listening and fire it to the other memory cells.
-		if (
-			self.memory_isi
-			and self.retina_isi
-		):
-			self.isi = self.memory_isi.position + self.retina_isi.position
-
-		# If listening and memory isi and retina isi and either
-		# inactive or active and with identical features.
-		if (
-			self.memory_isi
-			and self.retina_isi
-			and not self.active
-		):
-			self.rest_time = timedelta(0, random.uniform(5,10))
-
-			self.listening = False
-
-		if (
-			self.memory_isi
-			and self.retina_isi
-			and self.active
-		):
-
-			if (self.memory_isi.feature == self.retina_isi.feature):
-
-				self.rest_time = timedelta(0, random.uniform(5,10))
-
-				self.listening = False
-				
-			else:
-
-				self.active = False
-				
-		# Clear all the input channels
-		self.retina_input = None
-		self.memory_input = None
-		self.matching_input = None
-
-	def fire(self):
-		log.info('{name:8} {id_num} fires {isi}'.format(
-			id_num=self.id_num,
-			name=self.name,
-			isi=self.isi,
-		))
-		for cell in self.links:
-			self.send(cell,self.isi)
-		self.memory_isi = None
-		self.retina_isi = None
-
-	def rest(self):
-
-
-	#def adopt(self):
-	#	self.isi = MatchISI(retina=self.retina_isi,memory=self.memory_isi)
-	#	self.hypothesis = self.isi.retina.position + self.isi.memory.position
-	#	self.rest()
-
-	def tick(self, dt):
-		if(
-			self.isi is not None
-		):
-			self.rest_time -= dt
-
-			if self.rest_time <= timedelta(0):
-				self.fire()
+	def __init__(self, id_num, where, what, hypothesis):
+		super().__init__(id_num, where, what)
+		self.hypothesis = hypothesis
 @
 
 <<nestor classes>>=
-<<matching class>>
+<<matching cell>>
 @
 
-\subsection{old listen code}
-<<old listen code>>=
-if (
-	self.matching_input is not None
-	and self.isi is None
-):
-	self.isi = self.matching_input
-	self.rest()
+\subsection{Process matching cell}
+<<process matching cell>>=
+def process_matching(cell, queue, mean, sigma, min_wait, max_wait, sleep):
+	start_time = datetime.now()
+	while True:
+		queue.read()
 
-	self.adopt()
-	log.info('{name} {id_num} diffuses hyp {isi}'.format(
-		name=self.name,
-		id_num=self.id_num,
-		isi=self.isi,
-	))
+@
 
-self.matching_input = None
-
-if self.retina_isi is None and self.retina_input is not None:
-
-	self.retina_isi = self.retina_input.position
-
-	log.info('{name} {id_num} adopts retina {x}'.format(
-		name=self.name,
-		id_num=self.id_num,
-		x=self.retina_isi,
-	))
-
-	if self.memory_isi is not None:
-		self.adopt()
-
-self.retina_input = None
-
-if self.memory_isi is None and self.memory_input is not None:
-
-	self.memory_isi = self.memory_input
-
-	log.info('{name} {id_num} adopts memory {x}'.format(
-		name=self.name,
-		id_num=self.id_num,
-		x=self.memory_isi,
-	))
-
-	if self.retina_isi is not None:
-		self.adopt()
-
-self.memory_input = None
+<<nestor methods>>=
+<<process matching cell>>
 @
 
 \section{Network}
+
+\subsection{Network namedtuple}
 <<network class>>=
 Network = namedtuple('Network',('retina','memory','matching'))
 @
@@ -410,21 +230,30 @@ def make_network(retina_count, matching_count, memory_features):
 
 	# Make retina cells
 	retina_cells = [
-		Retina(position=retina_count - retina_num,)
+		Retina(
+			id_num=retina_num,
+			where=retina_count - retina_num,
+			what=None,)
 		for retina_num
 		in range(retina_count)
 	]
 
 	# Make memory cells
 	memory_cells = [
-		Memory(position=memory_num, feature=feature)
+		Memory(
+			id_num=memory_num,
+			where=memory_num,
+			what=feature,)
 		for memory_num, feature
 		in enumerate(memory_features, start=1)
 	]
 
 	# Make matching cells
 	matching_cells = [
-		Matching(id_num=matching_num)
+		Matching(id_num=matching_num,
+			where=None,
+			what=None,
+			hypothesis=None,)
 		for matching_num
 		in range(matching_count)
 	]
@@ -449,41 +278,32 @@ def make_network(retina_count, matching_count, memory_features):
 <<make network function>>
 @
 
-\subsection{Update retina}
-<<update retina function>>=
-def update_retina(network, retina_features):
-	for cell, feature in zip(network.retina, retina_features):
-		cell.feature = feature
-		cell.isi = ISI(position=cell.position,feature=feature)
-@
-
-<<nestor methods>>=
-<<update retina function>>
-@
-
 \subsection{Run network function}
 <<run network function>>=
 def run_network(network, start):
-	i = 0
-	while True:
-		now = datetime.now()
-		dt = now - start
-		log.debug('Iteration {i} at {t}. dt={dt}'.format(
-			i=i,
-			t=now.strftime("%H:%M:%S.%f"),
-			dt=dt,
-		))
-		for cell in chain.from_iterable(network):
-			cell.tick(dt)
-		start = now
-		i += 1
-		time.sleep(0.2)
+
+	cell_worker = partial(
+		process_cell,
+		mean=1,
+		sigma=0.5,
+		min_wait=0.1,
+		max_wait=3,
+		sleep=0.1,)
+
+	cell_processes = [
+		Process(target=cell_worker, args=(cell,), daemon=True)
+		for cell
+		in network.retina + network.memory
+	]
+
+	[process.start() for process in cell_processes]
+
+	input()
 @
 
 <<dependencies>>=
-from itertools import chain
-from datetime import datetime
-import time
+from multiprocessing import Process
+from functools import partial
 @
 
 <<nestor methods>>=
@@ -492,7 +312,6 @@ import time
 
 \section{Front end}
 <<front end>>=
-
 description = (
 	"Run a NESTOR, mostly as a library" # Action of the script
 )
@@ -543,6 +362,12 @@ import argparse
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 <<dependencies>>
+from collections import namedtuple
+from datetime import datetime
+from datetime import timedelta
+from itertools import chain
+import random
+import time
 <<init logging>>
 <<nestor classes>>
 <<nestor methods>>
