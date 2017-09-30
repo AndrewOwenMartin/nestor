@@ -156,24 +156,23 @@ def update_retina(network, retina_features):
 
 \subsection{Process cell function}
 <<process cell function>>=
-def process_cell(cell, mean, sigma, min_wait, max_wait, sleep):
-	start_time = datetime.now()
-	time_to_fire = timedelta(0)
+def process_cell(cell, mean, sigma, min_wait, max_wait):
 	while True:
-		now = datetime.now()	
-		dt = datetime.now() - start_time
-		start_time = now
-		time_to_fire -= dt
-		if time_to_fire <= timedelta(0):
-			next_wait = max(
-				min(random.gauss(mean,sigma), max_wait),
-				min_wait)
-			log.info('{n}#{num} fires, next fire in {x:0.3f}s'.format(
-				n=cell.name,
-				num=cell.id_num,
-				x=next_wait))
-			time_to_fire = timedelta(0, next_wait)
-		time.sleep(sleep)
+		next_wait = max(
+			min(random.gauss(mean,sigma), max_wait),
+			min_wait)
+		time.sleep(next_wait)
+		for connection in cell.links:
+			isi = (cell.name, cell.where)
+			try:
+				connection.receptor.put(isi,block=False)
+			except queue.Full:
+				isi = 'nothing'
+		log.info('{n}#{num} fired {where} to all cells, next fire in {x:0.3f}s'.format(
+			n=cell.name,
+			num=cell.id_num,
+			where=isi,
+			x=next_wait))
 @
 
 <<dependencies>>=
@@ -191,9 +190,15 @@ class Matching(Cell):
 
 	name = 'matching'
 
-	def __init__(self, id_num, where, what, hypothesis):
+	def __init__(self, id_num, where=None, what=None, hypothesis=None, receptor=None):
 		super().__init__(id_num, where, what)
 		self.hypothesis = hypothesis
+		if receptor is None:
+			receptor = Queue(maxsize=1)
+		self.receptor = receptor
+@
+
+<<dependencies>>=
 @
 
 <<nestor classes>>=
@@ -202,11 +207,18 @@ class Matching(Cell):
 
 \subsection{Process matching cell}
 <<process matching cell>>=
-def process_matching(cell, queue, mean, sigma, min_wait, max_wait, sleep):
+def process_matching(cell, mean, sigma, min_wait, max_wait):
+
 	start_time = datetime.now()
 	while True:
-		queue.read()
+		signal = cell.receptor.get()
 
+		log.info('cell {c} gets {s}'.format(c=cell.id_num,s=signal))
+@
+
+<<dependencies>>=
+import time
+import queue
 @
 
 <<nestor methods>>=
@@ -250,10 +262,7 @@ def make_network(retina_count, matching_count, memory_features):
 
 	# Make matching cells
 	matching_cells = [
-		Matching(id_num=matching_num,
-			where=None,
-			what=None,
-			hypothesis=None,)
+		Matching(id_num=matching_num,)
 		for matching_num
 		in range(matching_count)
 	]
@@ -282,28 +291,46 @@ def make_network(retina_count, matching_count, memory_features):
 <<run network function>>=
 def run_network(network, start):
 
+	matching_sleep = 0.1
+	#sleep = 100
+
 	cell_worker = partial(
 		process_cell,
+		mean=5,
+		sigma=3,
+		min_wait=0.1,
+		max_wait=10)
+
+	static_cell_processes = [
+		Process(target=cell_worker, args=(cell,), daemon=True)
+		for cell
+		in chain(network.retina, network.memory)
+	]
+
+	matching_worker = partial(
+		process_matching,
 		mean=1,
 		sigma=0.5,
 		min_wait=0.1,
-		max_wait=3,
-		sleep=0.1,)
+		max_wait=3,)
 
-	cell_processes = [
-		Process(target=cell_worker, args=(cell,), daemon=True)
+	matching_cell_processes = [
+		Process(target=matching_worker, args=(cell,), daemon=True)
 		for cell
-		in network.retina + network.memory
+		in network.matching
 	]
 
-	[process.start() for process in cell_processes]
+	[process.start() for process in chain(
+		static_cell_processes,
+		matching_cell_processes,)]
 
 	input()
 @
 
 <<dependencies>>=
-from multiprocessing import Process
+from multiprocessing import Process, Queue
 from functools import partial
+from itertools import chain
 @
 
 <<nestor methods>>=

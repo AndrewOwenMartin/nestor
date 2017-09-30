@@ -7,7 +7,7 @@ COLS := $(shell tput cols)
 all: build $(project_name).pdf 
 
 $(project_name).tex: $(project_name).nw
-	noweave -t4 -filter btdefn -delay -latex -index $(project_name).nw | cpif $(project_name).tex
+	noweave -autodefs python -t4 -filter btdefn -delay -latex -index $(project_name).nw | cpif $(project_name).tex
 
 $(project_name).pdf: $(project_name).tex
 	latexmk -halt-on-error -pdf $(project_name).tex
