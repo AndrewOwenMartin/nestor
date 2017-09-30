@@ -173,8 +173,8 @@ def process_cell(cell, mean, sigma, min_wait, max_wait):
 			try:	
 				connection.receptor.put(isi,block=False)
 			except queue.Full:
-				log.info('static overflow')
-		#log.info('{n}#{num} fired {where} to all cells, next fire in {x:0.3f}s'.format(
+				log.debug('static overflow')
+		#log.debug('{n}#{num} fired {where} to all cells, next fire in {x:0.3f}s'.format(
 		#	n=cell.name,
 		#	num=cell.id_num,
 		#	where=isi,
@@ -228,7 +228,7 @@ def process_matching(cell, mean, sigma, min_wait, max_wait, memory_cell_count, r
 		signal = cell.receptor.get()
 
 		if False and datetime.now() < not_listening_time:
-			#log.info("Matching {i} not listening".format(i=cell.id_num))
+			#log.debug("Matching {i} not listening".format(i=cell.id_num))
 			continue
 
 		output = update_matching(cell, signal, memory_cell_count, retina_cell_count)
@@ -244,11 +244,11 @@ def process_matching(cell, mean, sigma, min_wait, max_wait, memory_cell_count, r
 			for connection in cell.links:
 				try:	
 					connection.receptor.put(isi,block=False)
-					log.info('Matching {i} fires hypothesis {h}'.format(
+					log.debug('Matching {i} fires hypothesis {h}'.format(
 						i=cell.id_num,
 						h=isi.position,))
 				except queue.Full:
-					log.info('Matching {i} fires hypothesis {h} (overflow)'.format(
+					log.debug('Matching {i} fires hypothesis {h} (overflow)'.format(
 						i=cell.id_num,
 						h=isi.position,))
 
@@ -300,21 +300,21 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 			if cell.where is None: #1
 				if signal.origin == Retina.name: # Go from 1 to 2
 					cell.where = signal.position
-					log.info('#1 {name}{num} adopts retina position {x}'.format(
+					log.debug('#1 {name}{num} adopts retina position {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=signal.position,
 					))
 				elif signal.origin == Memory.name: # Go from 1 to 3
 					cell.what = signal.position
-					log.info('#1 {name}{num} adopts memory position {x}'.format(
+					log.debug('#1 {name}{num} adopts memory position {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=signal.position,
 					))
 				elif signal.origin == Matching.name: # Go from 1 to 5
 					cell.hypothesis = signal.position
-					log.info('#1 {name}{num} adopts matching hypothesis {x}'.format(
+					log.debug('#1 {name}{num} adopts matching hypothesis {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=signal.position,
@@ -328,7 +328,7 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 					fire = cell.where + cell.what
 					cell.what = None
 					cell.where = None
-					log.info('#2 {name}{num} propogates putative hypothesis {x}'.format(
+					log.debug('#2 {name}{num} propogates putative hypothesis {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=fire,
@@ -341,7 +341,7 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 					fire = cell.where + cell.what
 					cell.what = None
 					cell.where = None
-					log.info('#3 {name}{num} propogates putative hypothesis {x}'.format(
+					log.debug('#3 {name}{num} propogates putative hypothesis {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=fire,
@@ -355,37 +355,35 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 			if cell.where is None: #5
 				if signal.origin == Retina.name: # Go from 5 to 6
 					if signal.position >= cell.hypothesis:
-						log.info('#5 {name}{num} rejects retina {p} as too large and goes inactive'.format(
+						log.debug('#5 {name}{num} rejects retina {p} as too large but stays active'.format(
 							name=cell.name,
 							num=cell.id_num,
 							p=signal.position,
 						))
-						cell.hypothesis = None
 					elif signal.position + memory_cell_count < cell.hypothesis:
-						log.info('#5 {name}{num} rejects retina {p} as too small and goes inactive'.format(
+						log.debug('#5 {name}{num} rejects retina {p} as too small but stays active'.format(
 							name=cell.name,
 							num=cell.id_num,
 							p=signal.position,
 						))
-						cell.hypothesis = None
 					elif signal.position < cell.hypothesis:
 						# adopt retina 'what' and 'where'
 						cell.where = signal
-						log.info('#5 {name}{num} prepares retina test {x}'.format(
+						log.debug('#5 {name}{num} prepares retina test {x}'.format(
 							name=cell.name,
 							num=cell.id_num,
 							x=signal,
 						))
 				elif signal.origin == Memory.name: # Go from 5 to 7
 					if signal.position >= cell.hypothesis:
-						log.info('#5 {name}{num} rejects memory {p} as too large and goes inactive'.format(
+						log.debug('#5 {name}{num} rejects memory {p} as its bigger than hyp so hyp must be too small and goes inactive'.format(
 							name=cell.name,
 							num=cell.id_num,
 							p=signal.position,
 						))
 						cell.hypothesis = None
 					elif signal.position + retina_cell_count < cell.hypothesis:
-						log.info('#5 {name}{num} rejects memory {p} as too small and goes inactive'.format(
+						log.debug('#5 {name}{num} rejects memory {p} its too small for a retina to add up to hyp and goes inactive'.format(
 							name=cell.name,
 							num=cell.id_num,
 							p=signal.position,
@@ -394,7 +392,7 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 					elif signal.position < cell.hypothesis:
 						# adopt memory 'what' and 'where'
 						cell.what = signal
-						log.info('#5 {name}{num} prepares memory test {x}'.format(
+						log.debug('#5 {name}{num} prepares memory test {x}'.format(
 							name=cell.name,
 							num=cell.id_num,
 							x=signal,
@@ -403,7 +401,7 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 				elif signal.origin == Matching.name:
 					# do nothing with matching signal when active
 					pass
-					log.info('#5 {name}{num} ignores matching signal {x}'.format(
+					log.debug('#5 {name}{num} ignores matching signal {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=signal,
@@ -430,7 +428,7 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						# check features, delete where and what and if
 						# the features are different delete hypothesis
 					else:
-						log.info('#6 {name}{num} did not test memory {p} as adding it to {what} did not equal hyp {h}.'.format(
+						log.debug('#6 {name}{num} did not test memory {p} as adding it to {what} did not equal hyp {h}.'.format(
 							name=cell.name,
 							num=cell.id_num,
 							p=signal.position,
@@ -460,7 +458,7 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						cell.what = None
 						cell.where = None
 					else:
-						log.info('#7 {name}{num} did not test retina {p} as adding it to {what} did not equal hyp {h}.'.format(
+						log.debug('#7 {name}{num} did not test retina {p} as adding it to {what} did not equal hyp {h}.'.format(
 							name=cell.name,
 							num=cell.id_num,
 							p=signal.position,
@@ -618,14 +616,19 @@ if __name__ == '__main__':
 
 	#print(args.optional)
 
-	network = make_network(
-		retina_count=5,
-		matching_count=2,
-		memory_features=('red','green','red'),)
+	colours = ('black','blue','green','red','yellow','orange','purple','teal','white','brown')
 
-	update_retina(
-		network,
-		('green','red','green','red','black'),)
+	retina_count = 100
+	retina_features = tuple(random.choice(colours) for _ in range(retina_count))
+	memory_features = retina_features[55:65]
+	matching_count=10
+
+	network = make_network(
+		retina_count=retina_count,
+		matching_count=matching_count,
+		memory_features=memory_features,)
+
+	update_retina(network=network, retina_features=retina_features,)
 
 	try:
 		run_network(network,start=datetime.now())
