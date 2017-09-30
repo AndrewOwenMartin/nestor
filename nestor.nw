@@ -4,6 +4,7 @@
 \usepackage{noweb}
 \usepackage{amsmath}
 \usepackage[UKenglish]{datetime}
+\usepackage{booktabs}
 %\usepackage[UKenglish]{isodate}
 \newdateformat{mydate}{\twodigit{\THEDAY}{} \monthname[\THEMONTH]{} \THEYEAR}
 \noweboptions{longxref,alphasubpage,subscriptidents,subscriptquotedidents,longchunks}
@@ -95,7 +96,7 @@ Events
 
 \section{Inter-spike Interval (ISI)}
 <<isi class>>=
-ISI = namedtuple('ISI', ('position', 'feature'))
+ISI = namedtuple('ISI', ('origin', 'position', 'feature'))
 @
 
 <<nestor classes>>=
@@ -162,17 +163,22 @@ def process_cell(cell, mean, sigma, min_wait, max_wait):
 			min(random.gauss(mean,sigma), max_wait),
 			min_wait)
 		time.sleep(next_wait)
+
+		isi = ISI(
+			origin=cell.name,
+			position=cell.where,
+			feature=cell.what,)
+
 		for connection in cell.links:
-			isi = (cell.name, cell.where)
-			try:
+			try:	
 				connection.receptor.put(isi,block=False)
 			except queue.Full:
-				isi = 'nothing'
-		log.info('{n}#{num} fired {where} to all cells, next fire in {x:0.3f}s'.format(
-			n=cell.name,
-			num=cell.id_num,
-			where=isi,
-			x=next_wait))
+				log.info('static overflow')
+		#log.info('{n}#{num} fired {where} to all cells, next fire in {x:0.3f}s'.format(
+		#	n=cell.name,
+		#	num=cell.id_num,
+		#	where=isi,
+		#	x=next_wait))
 @
 
 <<dependencies>>=
@@ -190,7 +196,14 @@ class Matching(Cell):
 
 	name = 'matching'
 
-	def __init__(self, id_num, where=None, what=None, hypothesis=None, receptor=None):
+	def __init__(
+		self,
+		id_num,
+		where=None,
+		what=None,
+		hypothesis=None,
+		receptor=None
+	):
 		super().__init__(id_num, where, what)
 		self.hypothesis = hypothesis
 		if receptor is None:
@@ -207,13 +220,42 @@ class Matching(Cell):
 
 \subsection{Process matching cell}
 <<process matching cell>>=
-def process_matching(cell, mean, sigma, min_wait, max_wait):
+def process_matching(cell, mean, sigma, min_wait, max_wait, memory_cell_count, retina_cell_count):
 
-	start_time = datetime.now()
+	not_listening_time = datetime.now()
+
 	while True:
 		signal = cell.receptor.get()
 
-		log.info('cell {c} gets {s}'.format(c=cell.id_num,s=signal))
+		if False and datetime.now() < not_listening_time:
+			#log.info("Matching {i} not listening".format(i=cell.id_num))
+			continue
+
+		output = update_matching(cell, signal, memory_cell_count, retina_cell_count)
+
+		if output:
+
+			isi = ISI(
+				origin=cell.name,
+				position=output,
+				feature=None,)
+
+
+			for connection in cell.links:
+				try:	
+					connection.receptor.put(isi,block=False)
+					log.info('Matching {i} fires hypothesis {h}'.format(
+						i=cell.id_num,
+						h=isi.position,))
+				except queue.Full:
+					log.info('Matching {i} fires hypothesis {h} (overflow)'.format(
+						i=cell.id_num,
+						h=isi.position,))
+
+			not_listening_time = datetime.now() + timedelta(
+				0,
+				max(min(
+					random.gauss(mean,sigma,),max_wait,),min_wait,))
 @
 
 <<dependencies>>=
@@ -223,6 +265,218 @@ import queue
 
 <<nestor methods>>=
 <<process matching cell>>
+@
+
+\subsection{Update matching cell}
+A matching cell's ``where'' attribute is the retina input channel, a matching cell's ``what'' attribute is the memory input channel.
+
+\begin{table}
+	\centering
+	\begin{tabular}{cccc|ccc}
+		%\toprule{}
+		State & Active & Memory & Retina & Retina & Memory & Matching \\
+		\midrule
+		1&         F   &    F   &   F    &    2   &    3   &    5 \\
+		2&         F   &    F   &   T    &    -   &    1   &    - \\
+		3&         F   &    T   &   F    &    1   &    -   &    - \\
+		4&         F   &    T   &   T    &    X   &    X   &    X \\
+		5&         T   &    F   &   F    &    6   &    7   &    - \\
+		6&         T   &    F   &   T    &    -   & 5 or 1 &    - \\
+		7&         T   &    T   &   F    & 5 or 1 &    -   &    - \\
+		8&         T   &    T   &   k    &    X   &    X   &    X \\
+		%\bottomrule{}
+	\end{tabular}
+\caption{`-' is no change, `X' is don't care.}
+\label{tab:tablelabel}
+\end{table}
+
+<<update matching cell>>=
+def update_matching(cell, signal, memory_cell_count, retina_cell_count):
+
+	fire = None
+
+	if cell.hypothesis is None: # 1,2,3,4
+		if cell.what is None: #1,2
+			if cell.where is None: #1
+				if signal.origin == Retina.name: # Go from 1 to 2
+					cell.where = signal.position
+					log.info('#1 {name}{num} adopts retina position {x}'.format(
+						name=cell.name,
+						num=cell.id_num,
+						x=signal.position,
+					))
+				elif signal.origin == Memory.name: # Go from 1 to 3
+					cell.what = signal.position
+					log.info('#1 {name}{num} adopts memory position {x}'.format(
+						name=cell.name,
+						num=cell.id_num,
+						x=signal.position,
+					))
+				elif signal.origin == Matching.name: # Go from 1 to 5
+					cell.hypothesis = signal.position
+					log.info('#1 {name}{num} adopts matching hypothesis {x}'.format(
+						name=cell.name,
+						num=cell.id_num,
+						x=signal.position,
+					))
+					# Fire your hypothesis as a position
+					fire = cell.hypothesis
+			else: #2
+				if signal.origin == Memory.name: # Go from 2 to 1
+					cell.what = signal.position
+					# Fire what+where as a position
+					fire = cell.where + cell.what
+					cell.what = None
+					cell.where = None
+					log.info('#2 {name}{num} propogates putative hypothesis {x}'.format(
+						name=cell.name,
+						num=cell.id_num,
+						x=fire,
+					))
+		else: #3,4
+			if cell.where is None: #3
+				if signal.origin == Retina.name: # Go from 3 to 1
+					cell.where = signal.position
+					# Fire what+where as a position
+					fire = cell.where + cell.what
+					cell.what = None
+					cell.where = None
+					log.info('#3 {name}{num} propogates putative hypothesis {x}'.format(
+						name=cell.name,
+						num=cell.id_num,
+						x=fire,
+					))
+			else: #4
+				# shouldn't happen, as soon as you have what and where
+				# and are inactive, you'll fire and delete what+where
+				raise RuntimeException('state 4')
+	else: # 5,6,7,8
+		if cell.what is None: #5,6
+			if cell.where is None: #5
+				if signal.origin == Retina.name: # Go from 5 to 6
+					if signal.position >= cell.hypothesis:
+						log.info('#5 {name}{num} rejects retina {p} as too large and goes inactive'.format(
+							name=cell.name,
+							num=cell.id_num,
+							p=signal.position,
+						))
+						cell.hypothesis = None
+					elif signal.position + memory_cell_count < cell.hypothesis:
+						log.info('#5 {name}{num} rejects retina {p} as too small and goes inactive'.format(
+							name=cell.name,
+							num=cell.id_num,
+							p=signal.position,
+						))
+						cell.hypothesis = None
+					elif signal.position < cell.hypothesis:
+						# adopt retina 'what' and 'where'
+						cell.where = signal
+						log.info('#5 {name}{num} prepares retina test {x}'.format(
+							name=cell.name,
+							num=cell.id_num,
+							x=signal,
+						))
+				elif signal.origin == Memory.name: # Go from 5 to 7
+					if signal.position >= cell.hypothesis:
+						log.info('#5 {name}{num} rejects memory {p} as too large and goes inactive'.format(
+							name=cell.name,
+							num=cell.id_num,
+							p=signal.position,
+						))
+						cell.hypothesis = None
+					elif signal.position + retina_cell_count < cell.hypothesis:
+						log.info('#5 {name}{num} rejects memory {p} as too small and goes inactive'.format(
+							name=cell.name,
+							num=cell.id_num,
+							p=signal.position,
+						))
+						cell.hypothesis = None
+					elif signal.position < cell.hypothesis:
+						# adopt memory 'what' and 'where'
+						cell.what = signal
+						log.info('#5 {name}{num} prepares memory test {x}'.format(
+							name=cell.name,
+							num=cell.id_num,
+							x=signal,
+						))
+
+				elif signal.origin == Matching.name:
+					# do nothing with matching signal when active
+					pass
+					log.info('#5 {name}{num} ignores matching signal {x}'.format(
+						name=cell.name,
+						num=cell.id_num,
+						x=signal,
+					))
+			else: #6
+				if signal.origin == Memory.name: # Go from 6 to 5 or 1
+					if cell.where.position + signal.position == cell.hypothesis:
+						cell.what = signal
+						if not (cell.what.feature == cell.where.feature):
+							cell.hypothesis = None
+						else:
+							# fire hypothesis
+							fire = cell.hypothesis
+						log.info('#6 {name}{num} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
+							name=cell.name,
+							num=cell.id_num,
+							a=cell.what,
+							b=cell.where,
+							h=cell.hypothesis,
+							f=fire,
+						))
+						cell.what = None
+						cell.where = None
+						# check features, delete where and what and if
+						# the features are different delete hypothesis
+					else:
+						log.info('#6 {name}{num} did not test memory {p} as adding it to {what} did not equal hyp {h}.'.format(
+							name=cell.name,
+							num=cell.id_num,
+							p=signal.position,
+							what=cell.where.position,
+							h=cell.hypothesis,
+						))
+		else: #7,8
+			if cell.where is None: #7
+				if signal.origin == Retina.name: # Go from 7 to 5 or 1
+					if cell.what.position + signal.position == cell.hypothesis:
+						cell.where = signal
+						# check features, delete where and what and if
+						# the features are different delete hypothesis
+						if not (cell.what.feature == cell.where.feature):
+							cell.hypothesis = None
+						else:
+							# fire hypothesis
+							fire = cell.hypothesis
+						log.info('#7 {name}{num} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
+							name=cell.name,
+							num=cell.id_num,
+							a=cell.what,
+							b=cell.where,
+							h=cell.hypothesis,
+							f=fire,
+						))
+						cell.what = None
+						cell.where = None
+					else:
+						log.info('#7 {name}{num} did not test retina {p} as adding it to {what} did not equal hyp {h}.'.format(
+							name=cell.name,
+							num=cell.id_num,
+							p=signal.position,
+							what=cell.what.position,
+							h=cell.hypothesis,
+						))
+
+			else: #8
+				# shouldn't happen, as soon as you have what and where
+				# and are active, you'll fire and delete what+where
+				raise RuntimeException('state 4')
+	return fire
+@
+
+<<nestor methods>>=
+<<update matching cell>>
 @
 
 \section{Network}
@@ -291,13 +545,10 @@ def make_network(retina_count, matching_count, memory_features):
 <<run network function>>=
 def run_network(network, start):
 
-	matching_sleep = 0.1
-	#sleep = 100
-
 	cell_worker = partial(
 		process_cell,
-		mean=5,
-		sigma=3,
+		mean=1.5,
+		sigma=0.5,
 		min_wait=0.1,
 		max_wait=10)
 
@@ -309,10 +560,12 @@ def run_network(network, start):
 
 	matching_worker = partial(
 		process_matching,
-		mean=1,
+		mean=1.5,
 		sigma=0.5,
 		min_wait=0.1,
-		max_wait=3,)
+		max_wait=10,
+		memory_cell_count=len(network.memory),
+		retina_cell_count=len(network.retina),)
 
 	matching_cell_processes = [
 		Process(target=matching_worker, args=(cell,), daemon=True)
