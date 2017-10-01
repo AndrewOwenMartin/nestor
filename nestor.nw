@@ -26,7 +26,7 @@
 
 \date{\mydate\today}
 
-\title{NESTOR}
+\title{A parallel implementation of NESTOR in Python3}
 \author{Andrew Owen Martin}
 
 \pagestyle{noweb}
@@ -109,24 +109,38 @@ ISI = namedtuple('ISI', ('origin', 'position', 'feature'))
 <<cell class>>=
 class Cell:
 
-	def __init__(self, id_num, where, what):
+	def __init__(self, id_num):
 		self.id_num = id_num
-		self.where = where
-		self.what = what
 
 	def __repr__(self):
-		return 'cell'
+		return '{name}#{num}'.format(name=self.name,num=self.id_num)
 @
 
 
 <<nestor classes>>=
 <<cell class>>
 @
+
+\subsection{Data cell class}
+<<data cell class>>=
+class DataCell(Cell):
+
+	def __init__(self, id_num, where, what):
+		super().__init__(id_num)
+		self.where = where
+		self.what = what
+@
+
+<<nestor classes>>=
+<<data cell class>>
+@
+
 \subsection{Memory cell}
 <<memory cell>>=
-class Memory(Cell):
+class Memory(DataCell):
 
 	name = 'memory'
+
 @
 
 <<nestor classes>>=
@@ -135,7 +149,7 @@ class Memory(Cell):
 
 \subsection{Retina cell}
 <<retina cell>>=
-class Retina(Cell):
+class Retina(DataCell):
 	
 	name = 'retina'
 @
@@ -199,12 +213,14 @@ class Matching(Cell):
 	def __init__(
 		self,
 		id_num,
-		where=None,
-		what=None,
+		retina=None,
+		memory=None,
 		hypothesis=None,
 		receptor=None
 	):
-		super().__init__(id_num, where, what)
+		super().__init__(id_num)
+		self.retina = retina
+		self.memory = memory
 		self.hypothesis = hypothesis
 		if receptor is None:
 			receptor = Queue(maxsize=1)
@@ -268,7 +284,7 @@ import queue
 @
 
 \subsection{Update matching cell}
-A matching cell's ``where'' attribute is the retina input channel, a matching cell's ``what'' attribute is the memory input channel.
+A matching cell's ``retina'' attribute is the retina input channel, a matching cell's ``memory'' attribute is the memory input channel.
 
 \begin{table}
 	\centering
@@ -296,17 +312,17 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 	fire = None
 
 	if cell.hypothesis is None: # 1,2,3,4
-		if cell.what is None: #1,2
-			if cell.where is None: #1
+		if cell.memory is None: #1,2
+			if cell.retina is None: #1
 				if signal.origin == Retina.name: # Go from 1 to 2
-					cell.where = signal.position
+					cell.retina = signal.position
 					log.debug('#1 {name}{num} adopts retina position {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=signal.position,
 					))
 				elif signal.origin == Memory.name: # Go from 1 to 3
-					cell.what = signal.position
+					cell.memory = signal.position
 					log.debug('#1 {name}{num} adopts memory position {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
@@ -323,36 +339,36 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 					fire = cell.hypothesis
 			else: #2
 				if signal.origin == Memory.name: # Go from 2 to 1
-					cell.what = signal.position
-					# Fire what+where as a position
-					fire = cell.where + cell.what
-					cell.what = None
-					cell.where = None
+					cell.memory = signal.position
+					# Fire memory+retina as a position
+					fire = cell.retina + cell.memory
+					cell.memory = None
+					cell.retina = None
 					log.debug('#2 {name}{num} propogates putative hypothesis {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=fire,
 					))
 		else: #3,4
-			if cell.where is None: #3
+			if cell.retina is None: #3
 				if signal.origin == Retina.name: # Go from 3 to 1
-					cell.where = signal.position
-					# Fire what+where as a position
-					fire = cell.where + cell.what
-					cell.what = None
-					cell.where = None
+					cell.retina = signal.position
+					# Fire memory+retina as a position
+					fire = cell.retina + cell.memory
+					cell.memory = None
+					cell.retina = None
 					log.debug('#3 {name}{num} propogates putative hypothesis {x}'.format(
 						name=cell.name,
 						num=cell.id_num,
 						x=fire,
 					))
 			else: #4
-				# shouldn't happen, as soon as you have what and where
-				# and are inactive, you'll fire and delete what+where
+				# shouldn't happen, as soon as you have memory and retina
+				# and are inactive, you'll fire and delete memory+retina
 				raise RuntimeException('state 4')
 	else: # 5,6,7,8
-		if cell.what is None: #5,6
-			if cell.where is None: #5
+		if cell.memory is None: #5,6
+			if cell.retina is None: #5
 				if signal.origin == Retina.name: # Go from 5 to 6
 					if signal.position >= cell.hypothesis:
 						log.debug('#5 {name}{num} rejects retina {p} as too large but stays active'.format(
@@ -367,8 +383,8 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 							p=signal.position,
 						))
 					elif signal.position < cell.hypothesis:
-						# adopt retina 'what' and 'where'
-						cell.where = signal
+						# adopt retina 'memory' and 'retina'
+						cell.retina = signal
 						log.debug('#5 {name}{num} prepares retina test {x}'.format(
 							name=cell.name,
 							num=cell.id_num,
@@ -390,8 +406,8 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						))
 						cell.hypothesis = None
 					elif signal.position < cell.hypothesis:
-						# adopt memory 'what' and 'where'
-						cell.what = signal
+						# adopt memory 'memory' and 'retina'
+						cell.memory = signal
 						log.debug('#5 {name}{num} prepares memory test {x}'.format(
 							name=cell.name,
 							num=cell.id_num,
@@ -408,9 +424,9 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 					))
 			else: #6
 				if signal.origin == Memory.name: # Go from 6 to 5 or 1
-					if cell.where.position + signal.position == cell.hypothesis:
-						cell.what = signal
-						if not (cell.what.feature == cell.where.feature):
+					if cell.retina.position + signal.position == cell.hypothesis:
+						cell.memory = signal
+						if not (cell.memory.feature == cell.retina.feature):
 							cell.hypothesis = None
 						else:
 							# fire hypothesis
@@ -418,31 +434,31 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						log.info('#6 {name}{num} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
 							name=cell.name,
 							num=cell.id_num,
-							a=cell.what,
-							b=cell.where,
+							a=cell.memory,
+							b=cell.retina,
 							h=cell.hypothesis,
 							f=fire,
 						))
-						cell.what = None
-						cell.where = None
-						# check features, delete where and what and if
+						cell.memory = None
+						cell.retina = None
+						# check features, delete retina and memory and if
 						# the features are different delete hypothesis
 					else:
-						log.debug('#6 {name}{num} did not test memory {p} as adding it to {what} did not equal hyp {h}.'.format(
+						log.debug('#6 {name}{num} did not test memory {p} as adding it to {memory} did not equal hyp {h}.'.format(
 							name=cell.name,
 							num=cell.id_num,
 							p=signal.position,
-							what=cell.where.position,
+							memory=cell.retina.position,
 							h=cell.hypothesis,
 						))
 		else: #7,8
-			if cell.where is None: #7
+			if cell.retina is None: #7
 				if signal.origin == Retina.name: # Go from 7 to 5 or 1
-					if cell.what.position + signal.position == cell.hypothesis:
-						cell.where = signal
-						# check features, delete where and what and if
+					if cell.memory.position + signal.position == cell.hypothesis:
+						cell.retina = signal
+						# check features, delete retina and memory and if
 						# the features are different delete hypothesis
-						if not (cell.what.feature == cell.where.feature):
+						if not (cell.memory.feature == cell.retina.feature):
 							cell.hypothesis = None
 						else:
 							# fire hypothesis
@@ -450,25 +466,25 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						log.info('#7 {name}{num} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
 							name=cell.name,
 							num=cell.id_num,
-							a=cell.what,
-							b=cell.where,
+							a=cell.memory,
+							b=cell.retina,
 							h=cell.hypothesis,
 							f=fire,
 						))
-						cell.what = None
-						cell.where = None
+						cell.memory = None
+						cell.retina = None
 					else:
-						log.debug('#7 {name}{num} did not test retina {p} as adding it to {what} did not equal hyp {h}.'.format(
+						log.debug('#7 {name}{num} did not test retina {p} as adding it to {memory} did not equal hyp {h}.'.format(
 							name=cell.name,
 							num=cell.id_num,
 							p=signal.position,
-							what=cell.what.position,
+							memory=cell.memory.position,
 							h=cell.hypothesis,
 						))
 
 			else: #8
-				# shouldn't happen, as soon as you have what and where
-				# and are active, you'll fire and delete what+where
+				# shouldn't happen, as soon as you have memory and retina
+				# and are active, you'll fire and delete memory+retina
 				raise RuntimeException('state 4')
 	return fire
 @
