@@ -38,8 +38,15 @@
 \section{Introduction}
 
 NESTOR is three sets of nodes, retina, memory and matching.
+The memory nodes are initialised with a ``model'' pattern, the retina nodes are set with a ``target'' pattern, and the matching nodes will eventually fire in a way that denotes a position of the model on the retina.
+
+Currently this implementation runs each node on a separate process, which doesn't challenge the machine much as they all mostly sleep.
 
 \section{Canonical description}
+
+These are quotes from the paper \cite{nasuto2009communicating}.
+
+\begin{quote}
 Matching neurons are fully interconnected to all other matching neurons.
 They are also fully connected to both receptor neurons and memory neurons.
 
@@ -66,225 +73,13 @@ If the comparison is successful (i.e. the `what' of the memory neuron matches th
 Otherwise, the matching neuron will become inactive. In the inactive state the matching neuron will accept information from either the first arriving spike train from another matching neuron or spike trains memory and the retina (albeit with no constraints on ISI's). I think this means it does not wait for a pair of spike trains where the `where' parts add up to something specific.
 
 If the first spike train comes from a retina and memory cell then it adds up the `where' parts and emits it. If the first spike comes from a matching cell then it will adopt the `where' part as its hypothesis and become active.
+\end{quote}
+
+Other papers that appear to be about NESTOR are: \cite{bishop2017nestor} \cite{de2000attention} \cite{morey2000implementation} \cite{de2000explorations} \cite{morey1999parallel}.
 
 \section{Finite state machine}
 
-
-So what are the actual states? Retina and memory cells just fire their position and feature, retina cells also update their feature. For matching cells I need a list of states, and a list of events.
-
-States
-\begin{enumerate}
-\item No retina and no memory and inactive
-\item Retina and no memory and inactive
-\item No retina and memory and inactive
-\item Retina and memory and inactive
-\item About to fire and inactive
-\item No retina and no memory and active
-\item Retina and no memory and active
-\item No retina and memory and active
-\item Retina and memory and active
-\item About to fire and active
-\end{enumerate}
-
-Events
-\begin{enumerate}
-\item Retina spike received
-\item Memory spike received
-\item Matching spike received
-\item Time to fire equals zero
-\end{enumerate}
-
-\section{Inter-spike Interval (ISI)}
-<<isi class>>=
-ISI = namedtuple('ISI', ('origin', 'position', 'feature'))
-@
-
-<<nestor classes>>=
-<<isi class>>
-@
-
-\section{Cell classes}
-
-\subsection{Cell class}
-<<cell class>>=
-class Cell:
-
-	def __init__(self, id_num):
-		self.id_num = id_num
-
-	def __repr__(self):
-		return '{name}#{num}'.format(name=self.name,num=self.id_num)
-@
-
-
-<<nestor classes>>=
-<<cell class>>
-@
-
-\subsection{Data cell class}
-<<data cell class>>=
-class DataCell(Cell):
-
-	def __init__(self, id_num, where, what):
-		super().__init__(id_num)
-		self.where = where
-		self.what = what
-@
-
-<<nestor classes>>=
-<<data cell class>>
-@
-
-\subsection{Memory cell}
-<<memory cell>>=
-class Memory(DataCell):
-
-	name = 'memory'
-
-@
-
-<<nestor classes>>=
-<<memory cell>>
-@
-
-\subsection{Retina cell}
-<<retina cell>>=
-class Retina(DataCell):
-	
-	name = 'retina'
-@
-
-<<nestor classes>>=
-<<retina cell>>
-@
-
-\subsection{Update retina function}
-<<update retina function>>=
-def update_retina(network, retina_features):
-	for cell, feature in zip(network.retina, retina_features):
-		cell.what = feature
-@
-
-<<nestor methods>>=
-<<update retina function>>
-@
-
-\subsection{Process cell function}
-<<process cell function>>=
-def process_cell(cell, mean, sigma, min_wait, max_wait):
-	while True:
-		next_wait = max(
-			min(random.gauss(mean,sigma), max_wait),
-			min_wait)
-		time.sleep(next_wait)
-
-		isi = ISI(
-			origin=cell.name,
-			position=cell.where,
-			feature=cell.what,)
-
-		for connection in cell.links:
-			try:	
-				connection.receptor.put(isi,block=False)
-			except queue.Full:
-				log.debug('static overflow')
-		#log.debug('{n}#{num} fired {where} to all cells, next fire in {x:0.3f}s'.format(
-		#	n=cell.name,
-		#	num=cell.id_num,
-		#	where=isi,
-		#	x=next_wait))
-@
-
-<<dependencies>>=
-import random
-import sys
-@
-
-<<nestor methods>>=
-<<process cell function>>
-@
-
-\subsection{Matching cell}
-<<matching cell>>=
-class Matching(Cell):
-
-	name = 'matching'
-
-	def __init__(
-		self,
-		id_num,
-		retina=None,
-		memory=None,
-		hypothesis=None,
-		receptor=None
-	):
-		super().__init__(id_num)
-		self.retina = retina
-		self.memory = memory
-		self.hypothesis = hypothesis
-		if receptor is None:
-			receptor = Queue(maxsize=1)
-		self.receptor = receptor
-@
-
-<<dependencies>>=
-@
-
-<<nestor classes>>=
-<<matching cell>>
-@
-
-\subsection{Process matching cell}
-<<process matching cell>>=
-def process_matching(cell, mean, sigma, min_wait, max_wait, memory_cell_count, retina_cell_count):
-
-	not_listening_time = datetime.now()
-
-	while True:
-		signal = cell.receptor.get()
-
-		if False and datetime.now() < not_listening_time:
-			#log.debug("Matching {i} not listening".format(i=cell.id_num))
-			continue
-
-		output = update_matching(cell, signal, memory_cell_count, retina_cell_count)
-
-		if output:
-
-			isi = ISI(
-				origin=cell.name,
-				position=output,
-				feature=None,)
-
-
-			for connection in cell.links:
-				try:	
-					connection.receptor.put(isi,block=False)
-					log.debug('Matching {i} fires hypothesis {h}'.format(
-						i=cell.id_num,
-						h=isi.position,))
-				except queue.Full:
-					log.debug('Matching {i} fires hypothesis {h} (overflow)'.format(
-						i=cell.id_num,
-						h=isi.position,))
-
-			not_listening_time = datetime.now() + timedelta(
-				0,
-				max(min(
-					random.gauss(mean,sigma,),max_wait,),min_wait,))
-@
-
-<<dependencies>>=
-import time
-import queue
-@
-
-<<nestor methods>>=
-<<process matching cell>>
-@
-
-\subsection{Update matching cell}
-A matching cell's ``retina'' attribute is the retina input channel, a matching cell's ``memory'' attribute is the memory input channel.
+See Table~\ref{tab:fsmtable}.
 
 \begin{table}
 	\centering
@@ -303,9 +98,264 @@ A matching cell's ``retina'' attribute is the retina input channel, a matching c
 		%\bottomrule{}
 	\end{tabular}
 \caption{`-' is no change, `X' is don't care.}
-\label{tab:tablelabel}
+\label{tab:fsmtable}
 \end{table}
 
+\section{Inter-spike Interval (ISI)}
+
+The ISI is read-only so a tuple is a suitable data structure, I've given it the [[origin]] attribute so [[Matching]] neurons don't need to have more than one input channel.
+
+<<isi class>>=
+`ISI = namedtuple('ISI', ('origin', 'position', 'feature'))
+@
+
+<<nestor classes>>=
+<<isi class>>
+@
+
+\section{Cell classes}
+
+This implementation uses a class hierarchy for cells.
+\begin{itemize}
+\item [[Cell]] $\rightarrow{}$ [[Matching]]
+\item [[Cell]] $\rightarrow{}$ [[DataCell]] $\rightarrow{}$ [[Memory]]
+\item [[Cell]] $\rightarrow{}$ [[DataCell]] $\rightarrow{}$ [[Retina]]
+\end{itemize}
+
+\subsection{Cell class}
+
+The top cell class just has an [[id_num]] attribute for convenience when logging.
+
+Cells are expected to have a links attribute defined before they're actually ran. This is a list of other cells to which they will send their [[ISI]]s.
+
+<<cell class>>=
+class `Cell:
+
+	__slots__ = ('id_num','links')
+
+	def __init__(self, id_num):
+		self.id_num = id_num
+
+	def __repr__(self):
+		return '{name}#{num}'.format(name=self.name.title(),num=self.id_num)
+@
+
+<<nestor classes>>=
+<<cell class>>
+@
+
+\subsection{Data cell class}
+
+Data cells, i.e. Memory and Retina cells have ``where'' and ``what'' attributes.
+
+<<data cell class>>=
+class `DataCell(Cell):
+
+	__slots__ = ('where','what')
+
+	def __init__(self, id_num, where, what=None):
+		super().__init__(id_num)
+		self.where = where
+		self.what = what
+@
+
+<<nestor classes>>=
+<<data cell class>>
+@
+
+\subsection{Memory cell}
+
+Memory cells are expected to be set at initialisation, and not changed.
+<<memory cell>>=
+class `Memory(DataCell):
+
+	name = 'memory'
+@
+
+<<nestor classes>>=
+<<memory cell>>
+@
+
+\subsection{Retina cell}
+Retina cells are expected to be periodically updated with [[update_retina]].
+<<retina cell>>=
+class `Retina(DataCell):
+	
+	name = 'retina'
+@
+
+<<nestor classes>>=
+<<retina cell>>
+@
+
+\subsection{Wait function}
+
+Returns a number of seconds from a bounded gaussian distribution. Often used with [[partial]] from the [[functools]] library.
+
+<<wait function>>=
+def wait(mean, sigma, min_wait, max_wait):
+	return max(
+		min(random.gauss(mean,sigma), max_wait),
+		min_wait)
+@
+
+<<dependencies>>=
+import random
+@
+
+<<nestor methods>>=
+<<wait function>>
+@
+
+\subsection{Process cell function}
+
+This function takes a [[DataCell]], 
+
+<<process cell function>>=
+def process_cell(cell, mean, sigma, min_wait, max_wait):
+	''' Take a DataCell, and some variables defining firing rate'''
+
+	sleep_time = partial(wait, mean, sigma, min_wait, max_wait)	
+
+	while True:
+
+		next_wait = sleep_time() 
+
+		time.sleep(next_wait)
+
+		isi = ISI(origin=cell.name, position=cell.where, feature=cell.what)
+
+		for connection in cell.links:
+
+			try:	
+
+				connection.receptor.put(isi,block=False)
+
+			except queue.Full:
+
+				pass
+
+		log.debug(
+			'{n}#{num} fired {where} to all cells, '
+			'next fire in {x:0.3f}s'.format(
+			n=cell.name,
+			num=cell.id_num,
+			where=isi,
+			x=next_wait))
+@
+
+
+<<nestor methods>>=
+<<process cell function>>
+@
+
+\subsection{Matching cell}
+
+Class definition for the Matching cell. Retina and Memory store data received from their respective channels.
+
+<<matching cell>>=
+class `Matching(Cell):
+
+	name = 'matching'
+
+	max_input_isi_count = 1
+
+	def __init__(
+		self,
+		id_num,
+		retina=None,
+		memory=None,
+		hypothesis=None,
+		receptor=None,
+	):
+		'''id_num = convenience identifier
+		Ignore all the other attributes, unless you're copying the
+		Matching cell as they'll be set during processing.
+		receptor will be set during initialisation.'''
+
+		super().__init__(id_num)
+		self.retina = retina
+		self.memory = memory
+		self.hypothesis = hypothesis
+		if receptor is None:
+			receptor = Queue(maxsize=Matching.max_input_isi_count)
+		self.receptor = receptor
+@
+
+<<nestor classes>>=
+<<matching cell>>
+@
+
+\subsection{Process matching cell}
+<<process matching cell>>=
+def process_matching(
+	cell,
+	mean,
+	sigma,
+	min_wait,
+	max_wait,
+	memory_cell_count,
+	retina_cell_count):
+
+	not_listening_time = datetime.now()
+
+	sleep_time = partial(wait, mean, sigma, min_wait, max_wait)	
+
+	process_signal = partial(
+		update_matching,
+		cell,
+		memory_cell_count=memory_cell_count,
+		retina_cell_count=retina_cell_count,)
+
+	while True:
+
+		signal = cell.receptor.get()
+
+		if False and datetime.now() < not_listening_time:
+			continue
+
+		output = process_signal(signal)
+
+		if output:
+
+			matching_fire(cell, output)
+
+			not_listening_time = (
+				datetime.now()
+				+ timedelta(0,sleep_time(),),)
+@
+
+<<dependencies>>=
+import time
+import queue
+@
+
+<<nestor methods>>=
+<<process matching cell>>
+@
+
+\subsection{Matching fire function}
+<<matching fire function>>=
+def matching_fire(cell, output):
+
+	isi = ISI(origin=cell.name, position=output, feature=None,)
+
+	for connection in cell.links:
+
+		try:	
+
+			connection.receptor.put(isi,block=False)
+
+		except queue.Full:
+
+			pass
+@
+
+<<nestor methods>>=
+<<matching fire function>>
+@
+
+\subsection{Update matching cell}
 <<update matching cell>>=
 def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 
@@ -316,23 +366,20 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 			if cell.retina is None: #1
 				if signal.origin == Retina.name: # Go from 1 to 2
 					cell.retina = signal.position
-					log.debug('#1 {name}{num} adopts retina position {x}'.format(
-						name=cell.name,
-						num=cell.id_num,
+					log.debug('#1 {cell} adopts retina position {x}'.format(
+						cell=cell,
 						x=signal.position,
 					))
 				elif signal.origin == Memory.name: # Go from 1 to 3
 					cell.memory = signal.position
-					log.debug('#1 {name}{num} adopts memory position {x}'.format(
-						name=cell.name,
-						num=cell.id_num,
+					log.debug('#1 {cell} adopts memory position {x}'.format(
+						cell=cell,
 						x=signal.position,
 					))
 				elif signal.origin == Matching.name: # Go from 1 to 5
 					cell.hypothesis = signal.position
-					log.debug('#1 {name}{num} adopts matching hypothesis {x}'.format(
-						name=cell.name,
-						num=cell.id_num,
+					log.debug('#1 {cell} adopts matching hypothesis {x}'.format(
+						cell=cell,
 						x=signal.position,
 					))
 					# Fire your hypothesis as a position
@@ -344,9 +391,8 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 					fire = cell.retina + cell.memory
 					cell.memory = None
 					cell.retina = None
-					log.debug('#2 {name}{num} propogates putative hypothesis {x}'.format(
-						name=cell.name,
-						num=cell.id_num,
+					log.debug('#2 {cell} propogates putative hypothesis {x}'.format(
+						cell=cell,
 						x=fire,
 					))
 		else: #3,4
@@ -357,9 +403,8 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 					fire = cell.retina + cell.memory
 					cell.memory = None
 					cell.retina = None
-					log.debug('#3 {name}{num} propogates putative hypothesis {x}'.format(
-						name=cell.name,
-						num=cell.id_num,
+					log.debug('#3 {cell} propogates putative hypothesis {x}'.format(
+						cell=cell,
 						x=fire,
 					))
 			else: #4
@@ -371,55 +416,48 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 			if cell.retina is None: #5
 				if signal.origin == Retina.name: # Go from 5 to 6
 					if signal.position >= cell.hypothesis:
-						log.debug('#5 {name}{num} rejects retina {p} as too large but stays active'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.debug('#5 {cell} rejects retina {p} as too large but stays active'.format(
+							cell=cell,
 							p=signal.position,
 						))
 					elif signal.position + memory_cell_count < cell.hypothesis:
-						log.debug('#5 {name}{num} rejects retina {p} as too small but stays active'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.debug('#5 {cell} rejects retina {p} as too small but stays active'.format(
+							cell=cell,
 							p=signal.position,
 						))
 					elif signal.position < cell.hypothesis:
 						# adopt retina 'memory' and 'retina'
 						cell.retina = signal
-						log.debug('#5 {name}{num} prepares retina test {x}'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.debug('#5 {cell} prepares retina test {x}'.format(
+							cell=cell,
 							x=signal,
 						))
 				elif signal.origin == Memory.name: # Go from 5 to 7
 					if signal.position >= cell.hypothesis:
-						log.debug('#5 {name}{num} rejects memory {p} as its bigger than hyp so hyp must be too small and goes inactive'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.debug('#5 {cell} rejects memory {p} as its bigger than hyp so hyp must be too small and goes inactive'.format(
+							cell=cell,
 							p=signal.position,
 						))
 						cell.hypothesis = None
 					elif signal.position + retina_cell_count < cell.hypothesis:
-						log.debug('#5 {name}{num} rejects memory {p} its too small for a retina to add up to hyp and goes inactive'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.debug('#5 {cell} rejects memory {p} its too small for a retina to add up to hyp and goes inactive'.format(
+							cell=cell,
 							p=signal.position,
 						))
 						cell.hypothesis = None
 					elif signal.position < cell.hypothesis:
 						# adopt memory 'memory' and 'retina'
 						cell.memory = signal
-						log.debug('#5 {name}{num} prepares memory test {x}'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.debug('#5 {cell} prepares memory test {x}'.format(
+							cell=cell,
 							x=signal,
 						))
 
 				elif signal.origin == Matching.name:
 					# do nothing with matching signal when active
 					pass
-					log.debug('#5 {name}{num} ignores matching signal {x}'.format(
-						name=cell.name,
-						num=cell.id_num,
+					log.debug('#5 {cell} ignores matching signal {x}'.format(
+						cell=cell,
 						x=signal,
 					))
 			else: #6
@@ -431,9 +469,8 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						else:
 							# fire hypothesis
 							fire = cell.hypothesis
-						log.info('#6 {name}{num} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.info('#6 {cell} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
+							cell=cell,
 							a=cell.memory,
 							b=cell.retina,
 							h=cell.hypothesis,
@@ -444,9 +481,8 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						# check features, delete retina and memory and if
 						# the features are different delete hypothesis
 					else:
-						log.debug('#6 {name}{num} did not test memory {p} as adding it to {memory} did not equal hyp {h}.'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.debug('#6 {cell} did not test memory {p} as adding it to {memory} did not equal hyp {h}.'.format(
+							cell=cell,
 							p=signal.position,
 							memory=cell.retina.position,
 							h=cell.hypothesis,
@@ -463,9 +499,8 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						else:
 							# fire hypothesis
 							fire = cell.hypothesis
-						log.info('#7 {name}{num} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.info('#7 {cell} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
+							cell=cell,
 							a=cell.memory,
 							b=cell.retina,
 							h=cell.hypothesis,
@@ -474,9 +509,8 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 						cell.memory = None
 						cell.retina = None
 					else:
-						log.debug('#7 {name}{num} did not test retina {p} as adding it to {memory} did not equal hyp {h}.'.format(
-							name=cell.name,
-							num=cell.id_num,
+						log.debug('#7 {cell} did not test retina {p} as adding it to {memory} did not equal hyp {h}.'.format(
+							cell=cell,
 							p=signal.position,
 							memory=cell.memory.position,
 							h=cell.hypothesis,
@@ -497,7 +531,7 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 
 \subsection{Network namedtuple}
 <<network class>>=
-Network = namedtuple('Network',('retina','memory','matching'))
+`Network = namedtuple('Network',('retina','memory','matching'))
 @
 
 <<nestor classes>>=
@@ -505,42 +539,37 @@ Network = namedtuple('Network',('retina','memory','matching'))
 @
 
 \subsection{Make Network function}
+
+Constructs all the retina cells, then the memory cells, then the matching cells, then links all the data cells to the matching cells and all the matching cells to all the other matching cells.
+
+At the end of this function you get a [[Network]] where all the [[Retina]] cells have [[None]] as their features, they need to be initialised with [[update_retina]].
+
 <<make network function>>=
 def make_network(retina_count, matching_count, memory_features):
 
-	# Make retina cells
 	retina_cells = [
-		Retina(
-			id_num=retina_num,
-			where=retina_count - retina_num,
-			what=None,)
+		Retina(id_num=retina_num, where=retina_count - retina_num,)
 		for retina_num
 		in range(retina_count)
 	]
 
-	# Make memory cells
 	memory_cells = [
-		Memory(
-			id_num=memory_num,
-			where=memory_num,
-			what=feature,)
+		Memory(id_num=memory_num, where=memory_num, what=feature,)
 		for memory_num, feature
 		in enumerate(memory_features, start=1)
 	]
 
-	# Make matching cells
 	matching_cells = [
 		Matching(id_num=matching_num,)
 		for matching_num
 		in range(matching_count)
 	]
 
-	for retina in retina_cells:
-		retina.links = matching_cells
+	# Link all data (memory and retina) cells to all matching cells.
+	for data_cell in chain(retina_cells, memory_cells):
+		data_cell.links = matching_cells
 
-	for memory in memory_cells:
-		memory.links = matching_cells
-
+	# Link all matching cells to all other matching cells.
 	for num, matching in enumerate(matching_cells):
 		others = matching_cells[:num] + matching_cells[num+1:]
 		matching.links = others
@@ -555,9 +584,23 @@ def make_network(retina_count, matching_count, memory_features):
 <<make network function>>
 @
 
+\subsection{Update retina function}
+
+Sets the features of the [[Retina]] cells of a [[Network]].
+
+<<update retina function>>=
+def update_retina(network, retina_features):
+	for cell, feature in zip(network.retina, retina_features):
+		cell.what = feature
+@
+
+<<nestor methods>>=
+<<update retina function>>
+@
+
 \subsection{Run network function}
 <<run network function>>=
-def run_network(network, start):
+def run_network(network):
 
 	cell_worker = partial(
 		process_cell,
@@ -587,10 +630,13 @@ def run_network(network, start):
 		in network.matching
 	]
 
-	[process.start() for process in chain(
-		static_cell_processes,
-		matching_cell_processes,)]
+	[
+		process.start()
+		for process 
+		in chain(static_cell_processes,	matching_cell_processes,)
+	]
 
+	# The program doesn't exit until <enter> is pressed.
 	input()
 @
 
@@ -607,53 +653,72 @@ from itertools import chain
 \section{Front end}
 <<front end>>=
 description = (
-	"Run a NESTOR, mostly as a library" # Action of the script
+	"Run a NESTOR, mostly as a library"
 )
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser(
 		description=description,
 	)
-	
-	#parser.add_argument(
-	#	"positional_arg",
-	#	type=int,
-	#	help="Integer positional argument",
-	#)
 
-	parser.add_argument(
-		'-o','--optional',
-		type=int,
-		default=42,
-		help="Integer keyword argument",
-	)
+	# Args go here
 
 	args = parser.parse_args()
 
-	#print(args.optional)
+	retina_count=100
 
-	colours = ('black','blue','green','red','yellow','orange','purple','teal','white','brown')
-
-	retina_count = 100
-	retina_features = tuple(random.choice(colours) for _ in range(retina_count))
-	memory_features = retina_features[55:65]
-	matching_count=10
+	retina_features, memory_features = random_task(
+		retina_count=retina_count,
+		memory_count=10,
+		noise_count=1,
+	)
 
 	network = make_network(
 		retina_count=retina_count,
-		matching_count=matching_count,
+		matching_count=10,
 		memory_features=memory_features,)
 
 	update_retina(network=network, retina_features=retina_features,)
 
-	try:
-		run_network(network,start=datetime.now())
-	except KeyboardInterrupt:
-		log.info('finished')
+	run_network(network)
 @
 
 <<dependencies>>=
 import argparse
+@
+
+\subsection{Random task function}
+<<random task function>>=
+def random_task(retina_count, memory_count, noise_count):
+
+	colours = ('black','blue','green','red','yellow','orange',
+		'purple','teal','white','brown')
+	
+	retina_features = tuple(
+		random.choice(colours)
+		for _
+		in range(retina_count)
+	)
+
+	mem_num = max(0,(retina_count//2)-memory_count)
+
+	memory_features = retina_features[mem_num:mem_num+memory_count]
+
+	# Add noise.
+	for wrong_num in random.sample(range(memory_count),noise_count):
+		wrong_feature = retina_features[wrong_num]
+		while wrong_feature == retina_features[wrong_num]:
+			wrong_feature = random.choice(colours)
+		retina_features = (
+			retina_features[:wrong_num]
+			+ (wrong_feature,)
+			+ retina_features[wrong_num+1:])
+
+	return retina_features, memory_features
+@
+
+<<nestor methods>>=
+<<random task function>>
 @
 
 \section{Library definition}
@@ -681,6 +746,9 @@ log.basicConfig(level=log.INFO)
 <<dependencies>>=
 import logging as log
 @
+
+\bibliography{/home/amartin/sds_repository/bib/journal_publications,/home/amartin/sds_repository/bib/technical_reports,/home/amartin/sds_repository/bib/workshops_and_other_publications}
+\bibliographystyle{plain}
 
 \appendix{}
 
