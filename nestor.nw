@@ -3,11 +3,17 @@
 \usepackage{hyperref}
 \usepackage{noweb}
 \usepackage{amsmath}
+\usepackage{microtype}
 \usepackage[UKenglish]{datetime}
 \usepackage{booktabs}
 %\usepackage[UKenglish]{isodate}
-\newdateformat{mydate}{\twodigit{\THEDAY}{} \monthname[\THEMONTH]{} \THEYEAR}
+\newdateformat{mydate}{\THEDAY{} \monthname[\THEMONTH]{} \THEYEAR}
 \noweboptions{longxref,alphasubpage,subscriptidents,subscriptquotedidents,longchunks}
+
+\usepackage[utf8]{inputenc} % Remove biblatex 'ascii' errors
+\usepackage[T1]{fontenc} % Remove 'stretch' errors
+%\usepackage{lmodern}
+\usepackage{mathpazo} % Nice font
 
 % % Set up formatting to look more like a modern report than an old book.
 \setlength{\parindent}{0em}
@@ -26,10 +32,10 @@
 
 \date{\mydate\today}
 
-\title{A parallel implementation of NESTOR in Python3}
+\title{A parallel implementation of NESTOR in Python 3.4}
 \author{Andrew Owen Martin}
 
-\pagestyle{noweb}
+%\pagestyle{noweb}
 
 \begin{document}
 \maketitle
@@ -75,7 +81,12 @@ Otherwise, the matching neuron will become inactive. In the inactive state the m
 If the first spike train comes from a retina and memory cell then it adds up the `where' parts and emits it. If the first spike comes from a matching cell then it will adopt the `where' part as its hypothesis and become active.
 \end{quote}
 
-Other papers that appear to be about NESTOR are: \cite{bishop2017nestor} \cite{de2000attention} \cite{morey2000implementation} \cite{de2000explorations} \cite{morey1999parallel}.
+Other papers that appear to be about NESTOR are
+\cite{bishop2017nestor} 
+\cite{de2000explorations} 
+\cite{de2000attention} 
+\cite{morey1999parallel}
+\cite{morey2000implementation}.
 
 \section{Finite state machine}
 
@@ -94,7 +105,7 @@ See Table~\ref{tab:fsmtable}.
 		5&         T   &    F   &   F    &    6   &    7   &    - \\
 		6&         T   &    F   &   T    &    -   & 5 or 1 &    - \\
 		7&         T   &    T   &   F    & 5 or 1 &    -   &    - \\
-		8&         T   &    T   &   k    &    X   &    X   &    X \\
+		8&         T   &    T   &   T    &    X   &    X   &    X \\
 		%\bottomrule{}
 	\end{tabular}
 \caption{`-' is no change, `X' is don't care.}
@@ -103,7 +114,7 @@ See Table~\ref{tab:fsmtable}.
 
 \section{Inter-spike Interval (ISI)}
 
-The ISI is read-only so a tuple is a suitable data structure, I've given it the [[origin]] attribute so [[Matching]] neurons don't need to have more than one input channel.
+The ISI is read-only so a tuple is a suitable data structure, I've given it the [[origin]] attribute so [[Matching]] neurons can discern where the input came from and hence don't need to have more than one input channel.
 
 <<isi class>>=
 `ISI = namedtuple('ISI', ('origin', 'position', 'feature'))
@@ -126,7 +137,7 @@ This implementation uses a class hierarchy for cells.
 
 The top cell class just has an [[id_num]] attribute for convenience when logging.
 
-Cells are expected to have a links attribute defined before they're actually ran. This is a list of other cells to which they will send their [[ISI]]s.
+Cells are expected to have a links attribute defined before they're actually ran. This is a list of other cells to which they will send their ISIs.
 
 <<cell class>>=
 class `Cell:
@@ -190,7 +201,7 @@ class `Retina(DataCell):
 
 \subsection{Wait function}
 
-Returns a number of seconds from a bounded gaussian distribution. Often used with [[partial]] from the [[functools]] library.
+Returns a number of seconds from a bounded Gaussian distribution. Often used with [[partial]] from the [[functools]] library.
 
 <<wait function>>=
 def wait(mean, sigma, min_wait, max_wait):
@@ -225,6 +236,7 @@ def process_cell(cell, mean, sigma, min_wait, max_wait):
 
 		isi = ISI(origin=cell.name, position=cell.where, feature=cell.what)
 
+
 		for connection in cell.links:
 
 			try:	
@@ -234,14 +246,6 @@ def process_cell(cell, mean, sigma, min_wait, max_wait):
 			except queue.Full:
 
 				pass
-
-		log.debug(
-			'{n}#{num} fired {where} to all cells, '
-			'next fire in {x:0.3f}s'.format(
-			n=cell.name,
-			num=cell.id_num,
-			where=isi,
-			x=next_wait))
 @
 
 
@@ -257,6 +261,8 @@ Class definition for the Matching cell. Retina and Memory store data received fr
 class `Matching(Cell):
 
 	name = 'matching'
+
+	__slots__ = ('retina','memory','hypothesis','receptor')
 
 	max_input_isi_count = 1
 
@@ -338,6 +344,8 @@ import queue
 <<matching fire function>>=
 def matching_fire(cell, output):
 
+	log.info('{cell} fires {output}'.format(cell=cell, output=output))
+
 	isi = ISI(origin=cell.name, position=output, feature=None,)
 
 	for connection in cell.links:
@@ -361,165 +369,34 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 
 	fire = None
 
-	if cell.hypothesis is None: # 1,2,3,4
-		if cell.memory is None: #1,2
-			if cell.retina is None: #1
-				if signal.origin == Retina.name: # Go from 1 to 2
-					cell.retina = signal.position
-					log.debug('#1 {cell} adopts retina position {x}'.format(
-						cell=cell,
-						x=signal.position,
-					))
-				elif signal.origin == Memory.name: # Go from 1 to 3
-					cell.memory = signal.position
-					log.debug('#1 {cell} adopts memory position {x}'.format(
-						cell=cell,
-						x=signal.position,
-					))
-				elif signal.origin == Matching.name: # Go from 1 to 5
-					cell.hypothesis = signal.position
-					log.debug('#1 {cell} adopts matching hypothesis {x}'.format(
-						cell=cell,
-						x=signal.position,
-					))
-					# Fire your hypothesis as a position
-					fire = cell.hypothesis
-			else: #2
-				if signal.origin == Memory.name: # Go from 2 to 1
-					cell.memory = signal.position
-					# Fire memory+retina as a position
-					fire = cell.retina + cell.memory
-					cell.memory = None
-					cell.retina = None
-					log.debug('#2 {cell} propogates putative hypothesis {x}'.format(
-						cell=cell,
-						x=fire,
-					))
-		else: #3,4
-			if cell.retina is None: #3
-				if signal.origin == Retina.name: # Go from 3 to 1
-					cell.retina = signal.position
-					# Fire memory+retina as a position
-					fire = cell.retina + cell.memory
-					cell.memory = None
-					cell.retina = None
-					log.debug('#3 {cell} propogates putative hypothesis {x}'.format(
-						cell=cell,
-						x=fire,
-					))
-			else: #4
-				# shouldn't happen, as soon as you have memory and retina
-				# and are inactive, you'll fire and delete memory+retina
-				raise RuntimeException('state 4')
-	else: # 5,6,7,8
-		if cell.memory is None: #5,6
-			if cell.retina is None: #5
-				if signal.origin == Retina.name: # Go from 5 to 6
-					if signal.position >= cell.hypothesis:
-						log.debug('#5 {cell} rejects retina {p} as too large but stays active'.format(
-							cell=cell,
-							p=signal.position,
-						))
-					elif signal.position + memory_cell_count < cell.hypothesis:
-						log.debug('#5 {cell} rejects retina {p} as too small but stays active'.format(
-							cell=cell,
-							p=signal.position,
-						))
-					elif signal.position < cell.hypothesis:
-						# adopt retina 'memory' and 'retina'
-						cell.retina = signal
-						log.debug('#5 {cell} prepares retina test {x}'.format(
-							cell=cell,
-							x=signal,
-						))
-				elif signal.origin == Memory.name: # Go from 5 to 7
-					if signal.position >= cell.hypothesis:
-						log.debug('#5 {cell} rejects memory {p} as its bigger than hyp so hyp must be too small and goes inactive'.format(
-							cell=cell,
-							p=signal.position,
-						))
-						cell.hypothesis = None
-					elif signal.position + retina_cell_count < cell.hypothesis:
-						log.debug('#5 {cell} rejects memory {p} its too small for a retina to add up to hyp and goes inactive'.format(
-							cell=cell,
-							p=signal.position,
-						))
-						cell.hypothesis = None
-					elif signal.position < cell.hypothesis:
-						# adopt memory 'memory' and 'retina'
-						cell.memory = signal
-						log.debug('#5 {cell} prepares memory test {x}'.format(
-							cell=cell,
-							x=signal,
-						))
+	if cell.hypothesis is None: # 1,2,3
 
-				elif signal.origin == Matching.name:
-					# do nothing with matching signal when active
-					pass
-					log.debug('#5 {cell} ignores matching signal {x}'.format(
-						cell=cell,
-						x=signal,
-					))
-			else: #6
-				if signal.origin == Memory.name: # Go from 6 to 5 or 1
-					if cell.retina.position + signal.position == cell.hypothesis:
-						cell.memory = signal
-						if not (cell.memory.feature == cell.retina.feature):
-							cell.hypothesis = None
-						else:
-							# fire hypothesis
-							fire = cell.hypothesis
-						log.info('#6 {cell} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
-							cell=cell,
-							a=cell.memory,
-							b=cell.retina,
-							h=cell.hypothesis,
-							f=fire,
-						))
-						cell.memory = None
-						cell.retina = None
-						# check features, delete retina and memory and if
-						# the features are different delete hypothesis
-					else:
-						log.debug('#6 {cell} did not test memory {p} as adding it to {memory} did not equal hyp {h}.'.format(
-							cell=cell,
-							p=signal.position,
-							memory=cell.retina.position,
-							h=cell.hypothesis,
-						))
-		else: #7,8
-			if cell.retina is None: #7
-				if signal.origin == Retina.name: # Go from 7 to 5 or 1
-					if cell.memory.position + signal.position == cell.hypothesis:
-						cell.retina = signal
-						# check features, delete retina and memory and if
-						# the features are different delete hypothesis
-						if not (cell.memory.feature == cell.retina.feature):
-							cell.hypothesis = None
-						else:
-							# fire hypothesis
-							fire = cell.hypothesis
-						log.info('#7 {cell} tested {a} and {b}. Hyp is now {h}, firing {f}.'.format(
-							cell=cell,
-							a=cell.memory,
-							b=cell.retina,
-							h=cell.hypothesis,
-							f=fire,
-						))
-						cell.memory = None
-						cell.retina = None
-					else:
-						log.debug('#7 {cell} did not test retina {p} as adding it to {memory} did not equal hyp {h}.'.format(
-							cell=cell,
-							p=signal.position,
-							memory=cell.memory.position,
-							h=cell.hypothesis,
-						))
+		<<update inactive matching cell>>
 
-			else: #8
-				# shouldn't happen, as soon as you have memory and retina
-				# and are active, you'll fire and delete memory+retina
-				raise RuntimeException('state 4')
+		if cell.memory and cell.retina:
+
+			fire = cell.retina + cell.memory
+
+			cell.memory = None
+			cell.retina = None
+
+	else: # 5,6,7
+
+		<<update active matching cell>>
+
+		if cell.memory and cell.retina:
+
+			if not (cell.memory.feature == cell.retina.feature):
+
+				cell.hypothesis = None
+
+			else:
+
+				fire = cell.hypothesis
+
+			cell.memory = None
+			cell.retina = None
+
 	return fire
 @
 
@@ -527,9 +404,88 @@ def update_matching(cell, signal, memory_cell_count, retina_cell_count):
 <<update matching cell>>
 @
 
+\subsection{Update inactive matching cell}
+<<update inactive matching cell>>=
+if cell.memory is None:
+
+	if cell.retina is None: #1
+
+		if signal.origin == Retina.name: # Go from 1 to 2
+
+			cell.retina = signal.position
+
+		elif signal.origin == Memory.name: # Go from 1 to 3
+
+			cell.memory = signal.position
+
+		elif signal.origin == Matching.name: # Go from 1 to 5
+
+			cell.hypothesis = signal.position
+
+			fire = cell.hypothesis
+
+	elif signal.origin == Memory.name: #2
+
+		cell.memory = signal.position # Go from 2 to 1
+
+elif signal.origin == Retina.name: #3
+
+	cell.retina = signal.position # Go from 3 to 1
+@
+
+\subsection{Update active matching cell}
+<<update active matching cell>>=
+if cell.memory is None:
+
+	if cell.retina is None: #5
+
+		if signal.origin == Retina.name: # Go from 5 to 6
+
+			if (
+				signal.position >= cell.hypothesis
+				or (signal.position + memory_cell_count < cell.hypothesis)
+			):
+
+				pass
+
+			elif signal.position < cell.hypothesis:
+
+				cell.retina = signal
+
+		elif signal.origin == Memory.name:
+
+			if (
+				signal.position >= cell.hypothesis
+				or (signal.position + retina_cell_count < cell.hypothesis)
+			):
+
+				cell.hypothesis = None # Go from 5 to 1
+
+			elif signal.position < cell.hypothesis: # Go from 5 to 7
+
+				cell.memory = signal
+
+	elif( #6
+		signal.origin == Memory.name
+		and (cell.retina.position + signal.position == cell.hypothesis)
+	):
+
+		cell.memory = signal # Go from 6 to 5 or 1
+
+		if signal is None:
+			raise RuntimeError('signal is none')
+
+elif ( #7
+	signal.origin == Retina.name
+	and (cell.memory.position + signal.position == cell.hypothesis)
+):
+
+	cell.retina = signal # Go from 7 to 5 or 1
+@
+
 \section{Network}
 
-\subsection{Network namedtuple}
+\subsection{Network named tuple}
 <<network class>>=
 `Network = namedtuple('Network',('retina','memory','matching'))
 @
@@ -560,7 +516,7 @@ def make_network(retina_count, matching_count, memory_features):
 	]
 
 	matching_cells = [
-		Matching(id_num=matching_num,)
+		Matching(id_num=matching_num)
 		for matching_num
 		in range(matching_count)
 	]
@@ -670,7 +626,7 @@ if __name__ == '__main__':
 	retina_features, memory_features = random_task(
 		retina_count=retina_count,
 		memory_count=10,
-		noise_count=1,
+		noise_count=0,
 	)
 
 	network = make_network(
